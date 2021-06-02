@@ -105,8 +105,8 @@ class CocoPanoptic(CocoDataset):
         [
             {
                 'filename': f'{image_id:012}.png',
-                'image_id':9
-                'segments_info': {
+                'image_id':9,
+                'segments_info':
                     [
                         {
                             'id': 8345037, (segment_id in panoptic png,
@@ -115,11 +115,9 @@ class CocoPanoptic(CocoDataset):
                             'iscrowd': 0,
                             'bbox': (x1, y1, w, h),
                             'area': 24315,
-                            'segmentation': list,(coded mask)
                         },
                         ...
-                    }
-                }
+                    ],
             },
             ...
         ]
@@ -188,6 +186,31 @@ class CocoPanoptic(CocoDataset):
         self.write_png = write_png
         super(CocoPanoptic, self).__init__(**kwargs)
 
+    def _load_gt_panoptic(self, img_id):
+        ann_ids = self.coco.get_ann_ids(img_ids=[img_id])
+        ann_info = self.coco.load_anns(ann_ids)
+        # filter out unmatched images
+        ann_info = [i for i in ann_info if i['image_id'] == img_id]
+
+        pan_path = os.path.join(self.seg_prefix, self.formator.format(img_id))
+        assert os.path.isfile(pan_path), f'cannot find {pan_path}'
+
+        pan_png = mmcv.imread(pan_path)
+        pan_png = pan_png[:, :, ::-1]  # bgr to rgb
+        pan_png = rgb2id(pan_png)  # convert to segments_id
+
+        gt_seg = np.zeros_like(pan_png)  # 0 as ignore
+        for i, ann in enumerate(ann_info):
+            category_id = ann['category_id']
+            contiguous_cid = self.cat2label[category_id]
+            id = ann['id']
+            mask = (pan_png == id)
+            ann['segmentation'] = mask  # write mask to ann_info
+
+            # semantic label starts from 1
+            gt_seg = np.where(mask, contiguous_cid + 1, gt_seg)
+        return gt_seg
+
     def load_annotations(self, ann_file):
         """Load annotation from COCO Panoptic style annotation file.
 
@@ -205,8 +228,11 @@ class CocoPanoptic(CocoDataset):
         data_infos = []
         for i in self.img_ids:
             info = self.coco.load_imgs([i])[0]
+            # gt_seg = self._load_gt_panoptic(i)
+            # info['gt_semantic_seg'] = gt_seg
             info['filename'] = info['file_name']
             data_infos.append(info)
+
         return data_infos
 
     def get_ann_info(self, idx):
@@ -223,14 +249,14 @@ class CocoPanoptic(CocoDataset):
         ann_info = self.coco.load_anns(ann_ids)
         # filter out unmatched images
         ann_info = [i for i in ann_info if i['image_id'] == img_id]
-        return self._parse_ann_info(img_id, ann_info)
+        return self._parse_ann_info(self.data_infos[idx], ann_info)
 
-    def _parse_ann_info(self, img_id, ann_info):
+    def _parse_ann_info(self, img_info, ann_info):
         """Parse annotations and load panoptic gts.
 
         Args:
             ann_info (list[dict]): Annotation info of an image.
-            img_id (int): The index of an image.
+            img_info (dict): The information of an image.
 
         Returns:
             dict: A dict containing the following keys: bboxes, bboxes_ignore,
@@ -241,7 +267,8 @@ class CocoPanoptic(CocoDataset):
         gt_bboxes_ignore = []
         gt_masks = []
 
-        pan_path = os.path.join(self.seg_prefix, self.formator.format(img_id))
+        pan_path = os.path.join(self.seg_prefix,
+                                self.formator.format(img_info['id']))
         assert os.path.isfile(pan_path), f'cannot find {pan_path}'
         # todo: whether to use fileClient.
         pan_png = mmcv.imread(pan_path)
@@ -249,6 +276,7 @@ class CocoPanoptic(CocoDataset):
         pan_png = rgb2id(pan_png)  # convert to segments_id
         # todo: the start of semantic label
         gt_seg = np.zeros_like(pan_png)  # 0 as ignore
+        # gt_seg = img_info['gt_semantic_seg']
 
         for i, ann in enumerate(ann_info):
             category_id = ann['category_id']
@@ -258,16 +286,21 @@ class CocoPanoptic(CocoDataset):
             mask = (pan_png == id)
             # semantic label starts from 1
             gt_seg = np.where(mask, contiguous_cid + 1, gt_seg)
+            # mask = ann['segmentation']
 
             x1, y1, w, h = ann['bbox']
             if ann['area'] <= 0 or w < 1 or h < 1:
+                continue
+            inter_w = max(0, min(x1 + w, img_info['width']) - max(x1, 0))
+            inter_h = max(0, min(y1 + h, img_info['height']) - max(y1, 0))
+            if inter_w * inter_h == 0:
                 continue
             bbox = [x1, y1, x1 + w, y1 + h]
 
             is_thing = self.coco.load_cats(ids=category_id)[0]['isthing']
             if not is_thing:
                 continue
-            if ann['iscrowd']:
+            if ann.get('iscrowd', False):
                 gt_bboxes_ignore.append(bbox)
             else:
                 gt_bboxes.append(bbox)
