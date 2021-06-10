@@ -101,6 +101,7 @@ class PanoFpnHead(BaseStuffHead):
         self.init_weights()
 
     def _set_things_to_void(self, gt_semantic_seg):
+        gt_semantic_seg = gt_semantic_seg.int()
         fg_mask = (gt_semantic_seg >= self.fg_range[0]) * (
             gt_semantic_seg <= self.fg_range[1])
         bg_mask = (gt_semantic_seg >= self.bg_range[0]) * (
