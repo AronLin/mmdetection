@@ -8,7 +8,7 @@ from mmcv.utils import print_log
 from panopticapi.evaluation import OFFSET, VOID, PQStat
 from panopticapi.utils import IdGenerator, rgb2id
 
-from .api_wrappers import COCO as _COCO
+from .api_wrappers import COCO
 from .builder import DATASETS
 from .coco import CocoDataset
 
@@ -17,7 +17,7 @@ __all__ = ['CocoPanoptic', 'INSTANCE_OFFSET']
 INSTANCE_OFFSET = 1000
 
 
-class COCO(_COCO):
+class COCOPanoptic(COCO):
     """This wrapper is for loading the panoptic style annotation file.
 
     The format is shown in the CocoPanoptic class.
@@ -74,10 +74,8 @@ class COCO(_COCO):
 
         Now, self.anns is a list of annotation lists instead of a
         list of annotations.
-
         Args:
             ids (int array): integer ids specifying anns
-
         Returns:
             anns (object array): loaded ann objects
         """
@@ -95,18 +93,15 @@ class COCO(_COCO):
 
 @DATASETS.register_module()
 class CocoPanoptic(CocoDataset):
-    """Coco dataset for Panoptic segmentation.
-
-    The annotation format is shown as follows. The `ann` field is optional
-    for testing.
+    """Coco dataset for Panoptic segmentation. The annotation format is shown
+    as follows. The `ann` field is optional for testing.
 
     .. code-block:: none
-
         [
             {
                 'filename': f'{image_id:012}.png',
-                'image_id':9,
-                'segments_info':
+                'image_id':9
+                'segments_info': {
                     [
                         {
                             'id': 8345037, (segment_id in panoptic png,
@@ -115,13 +110,14 @@ class CocoPanoptic(CocoDataset):
                             'iscrowd': 0,
                             'bbox': (x1, y1, w, h),
                             'area': 24315,
+                            'segmentation': list,(coded mask)
                         },
                         ...
-                    ],
+                    }
+                }
             },
             ...
         ]
-
     Args:
         formator (str): the formater for the image name of a dataset.
         write_png (bool): whether to write the result image.
@@ -186,41 +182,15 @@ class CocoPanoptic(CocoDataset):
         self.write_png = write_png
         super(CocoPanoptic, self).__init__(**kwargs)
 
-    def _load_gt_panoptic(self, img_id):
-        ann_ids = self.coco.get_ann_ids(img_ids=[img_id])
-        ann_info = self.coco.load_anns(ann_ids)
-        # filter out unmatched images
-        ann_info = [i for i in ann_info if i['image_id'] == img_id]
-
-        pan_path = os.path.join(self.seg_prefix, self.formator.format(img_id))
-        assert os.path.isfile(pan_path), f'cannot find {pan_path}'
-
-        pan_png = mmcv.imread(pan_path)
-        pan_png = pan_png[:, :, ::-1]  # bgr to rgb
-        pan_png = rgb2id(pan_png)  # convert to segments_id
-
-        gt_seg = np.zeros_like(pan_png)  # 0 as ignore
-        for i, ann in enumerate(ann_info):
-            category_id = ann['category_id']
-            contiguous_cid = self.cat2label[category_id]
-            id = ann['id']
-            mask = (pan_png == id)
-            ann['segmentation'] = mask  # write mask to ann_info
-
-            # semantic label starts from 1
-            gt_seg = np.where(mask, contiguous_cid + 1, gt_seg)
-        return gt_seg
-
     def load_annotations(self, ann_file):
         """Load annotation from COCO Panoptic style annotation file.
 
         Args:
             ann_file (str): Path of annotation file.
-
         Returns:
             list[dict]: Annotation info from COCO api.
         """
-        self.coco = COCO(ann_file)
+        self.coco = COCOPanoptic(ann_file)
         self.cat_ids = self.coco.get_cat_ids()
         self.cat2label = {cat_id: i for i, cat_id in enumerate(self.cat_ids)}
         self.categories = self.coco.cats
@@ -228,11 +198,8 @@ class CocoPanoptic(CocoDataset):
         data_infos = []
         for i in self.img_ids:
             info = self.coco.load_imgs([i])[0]
-            # gt_seg = self._load_gt_panoptic(i)
-            # info['gt_semantic_seg'] = gt_seg
             info['filename'] = info['file_name']
             data_infos.append(info)
-
         return data_infos
 
     def get_ann_info(self, idx):
@@ -240,7 +207,6 @@ class CocoPanoptic(CocoDataset):
 
         Args:
             idx (int): Index of data.
-
         Returns:
             dict: Annotation info of specified index.
         """
@@ -249,15 +215,14 @@ class CocoPanoptic(CocoDataset):
         ann_info = self.coco.load_anns(ann_ids)
         # filter out unmatched images
         ann_info = [i for i in ann_info if i['image_id'] == img_id]
-        return self._parse_ann_info(self.data_infos[idx], ann_info)
+        return self._parse_ann_info(img_id, ann_info)
 
-    def _parse_ann_info(self, img_info, ann_info):
+    def _parse_ann_info(self, img_id, ann_info):
         """Parse annotations and load panoptic gts.
 
         Args:
             ann_info (list[dict]): Annotation info of an image.
-            img_info (dict): The information of an image.
-
+            img_id (int): The index of an image.
         Returns:
             dict: A dict containing the following keys: bboxes, bboxes_ignore,
                 labels, masks, seg_map.
@@ -265,47 +230,32 @@ class CocoPanoptic(CocoDataset):
         gt_bboxes = []
         gt_labels = []
         gt_bboxes_ignore = []
-        gt_masks = []
-
-        pan_path = os.path.join(self.seg_prefix,
-                                self.formator.format(img_info['id']))
-        assert os.path.isfile(pan_path), f'cannot find {pan_path}'
-        # todo: whether to use fileClient.
-        pan_png = mmcv.imread(pan_path)
-        pan_png = pan_png[:, :, ::-1]  # bgr to rgb
-        pan_png = rgb2id(pan_png)  # convert to segments_id
-        # todo: the start of semantic label
-        gt_seg = np.zeros_like(pan_png)  # 0 as ignore
-        # gt_seg = img_info['gt_semantic_seg']
+        gt_mask_infos = []
 
         for i, ann in enumerate(ann_info):
+            mask_info = dict()
+
             category_id = ann['category_id']
             contiguous_cid = self.cat2label[category_id]
-            id = ann['id']
 
-            mask = (pan_png == id)
-            # semantic label starts from 1
-            gt_seg = np.where(mask, contiguous_cid + 1, gt_seg)
-            # mask = ann['segmentation']
+            mask_info['id'] = ann['id']
+            mask_info['category'] = contiguous_cid
+            gt_mask_infos.append(mask_info)
 
             x1, y1, w, h = ann['bbox']
             if ann['area'] <= 0 or w < 1 or h < 1:
-                continue
-            inter_w = max(0, min(x1 + w, img_info['width']) - max(x1, 0))
-            inter_h = max(0, min(y1 + h, img_info['height']) - max(y1, 0))
-            if inter_w * inter_h == 0:
                 continue
             bbox = [x1, y1, x1 + w, y1 + h]
 
             is_thing = self.coco.load_cats(ids=category_id)[0]['isthing']
             if not is_thing:
                 continue
-            if ann.get('iscrowd', False):
+            if ann['iscrowd']:
                 gt_bboxes_ignore.append(bbox)
             else:
                 gt_bboxes.append(bbox)
                 gt_labels.append(contiguous_cid)
-                gt_masks.append(mask.astype(np.uint8))
+                mask_info['is_thing'] = True
 
         if gt_bboxes:
             gt_bboxes = np.array(gt_bboxes, dtype=np.float32)
@@ -323,9 +273,8 @@ class CocoPanoptic(CocoDataset):
             bboxes=gt_bboxes,
             labels=gt_labels,
             bboxes_ignore=gt_bboxes_ignore,
-            masks=gt_masks,  # already been encoded
-            seg_map=gt_seg  # already been loaded
-        )
+            masks=gt_mask_infos,
+            seg_map=self.formator.format(img_id))
 
         return ann
 
@@ -402,7 +351,6 @@ class CocoPanoptic(CocoDataset):
             outfile_prefix (str): The filename prefix of the json files. If the
                 prefix is "somepath/xxx", the json files will be named
                 "somepath/xxx.panoptic.json"
-
         Returns:
             dict[str: str]: The key is 'panoptic' and the value is
                 corresponding filename.
