@@ -1,4 +1,3 @@
-import logging
 import sys
 
 import numpy as np
@@ -6,8 +5,9 @@ import torch
 
 from mmdet.core import (bbox2roi, bbox_mapping, merge_aug_bboxes,
                         merge_aug_masks, multiclass_nms)
+from mmdet.utils import get_root_logger
 
-logger = logging.getLogger(__name__)
+logger = get_root_logger()
 if sys.version_info >= (3, 7):
     from mmdet.utils.contextmanagers import completed
 

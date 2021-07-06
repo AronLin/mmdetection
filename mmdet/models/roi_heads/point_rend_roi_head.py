@@ -1,5 +1,4 @@
 # Modified from https://github.com/facebookresearch/detectron2/tree/master/projects/PointRend  # noqa
-import logging
 import os
 
 import numpy as np
@@ -8,11 +7,12 @@ import torch.nn.functional as F
 from mmcv.ops import point_sample, rel_roi_point_to_rel_img_point
 
 from mmdet.core import bbox2roi, bbox_mapping, merge_aug_masks
+from mmdet.utils import get_root_logger
 from .. import builder
 from ..builder import HEADS
 from .standard_roi_head import StandardRoIHead
 
-logger = logging.getLogger(__name__)
+logger = get_root_logger()
 
 
 @HEADS.register_module()

@@ -1,5 +1,4 @@
 import copy
-import warnings
 
 import torch
 import torch.nn as nn
@@ -7,8 +6,11 @@ import torch.nn.functional as F
 from mmcv import ConfigDict
 from mmcv.ops import nms
 
+from mmdet.utils import get_root_logger
 from ..builder import HEADS
 from .guided_anchor_head import GuidedAnchorHead
+
+logger = get_root_logger()
 
 
 @HEADS.register_module()
@@ -83,7 +85,7 @@ class GARPNHead(GuidedAnchorHead):
 
         # deprecate arguments warning
         if 'nms' not in cfg or 'max_num' in cfg or 'nms_thr' in cfg:
-            warnings.warn(
+            logger.warning(
                 'In rpn_proposal or test_cfg, '
                 'nms_thr has been moved to a dict named nms as '
                 'iou_threshold, max_num has been renamed as max_per_img, '

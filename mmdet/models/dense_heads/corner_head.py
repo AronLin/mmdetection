@@ -1,4 +1,3 @@
-from logging import warning
 from math import ceil, log
 
 import torch
@@ -8,6 +7,7 @@ from mmcv.ops import CornerPool, batched_nms
 from mmcv.runner import BaseModule
 
 from mmdet.core import multi_apply
+from mmdet.utils import get_root_logger
 from ..builder import HEADS, build_loss
 from ..utils import gaussian_radius, gen_gaussian_target
 from ..utils.gaussian_target import (gather_feat, get_local_maximum,
@@ -15,6 +15,8 @@ from ..utils.gaussian_target import (gather_feat, get_local_maximum,
                                      transpose_and_gather_feat)
 from .base_dense_head import BaseDenseHead
 from .dense_test_mixins import BBoxTestMixin
+
+logger = get_root_logger()
 
 
 class BiCornerPool(BaseModule):
@@ -791,8 +793,8 @@ class CornerHead(BaseDenseHead, BBoxTestMixin):
             return bboxes, labels
 
         if 'nms_cfg' in cfg:
-            warning.warn('nms_cfg in test_cfg will be deprecated. '
-                         'Please rename it as nms')
+            logger.warning('nms_cfg in test_cfg will be deprecated. '
+                           'Please rename it as nms')
         if 'nms' not in cfg:
             cfg.nms = cfg.nms_cfg
 
