@@ -12,7 +12,7 @@ from .api_wrappers import COCO
 from .builder import DATASETS
 from .coco import CocoDataset
 
-__all__ = ['CocoPanoptic', 'INSTANCE_OFFSET']
+__all__ = ['CocoPanopticDataset', 'INSTANCE_OFFSET']
 
 INSTANCE_OFFSET = 1000
 
@@ -20,7 +20,7 @@ INSTANCE_OFFSET = 1000
 class COCOPanoptic(COCO):
     """This wrapper is for loading the panoptic style annotation file.
 
-    The format is shown in the CocoPanoptic class.
+    The format is shown in the CocoPanopticDataset class.
     """
 
     def __init__(self, annotation_file=None):
@@ -92,9 +92,11 @@ class COCOPanoptic(COCO):
 
 
 @DATASETS.register_module()
-class CocoPanoptic(CocoDataset):
-    """Coco dataset for Panoptic segmentation. The annotation format is shown
-    as follows. The `ann` field is optional for testing.
+class CocoPanopticDataset(CocoDataset):
+    """Coco dataset for Panoptic segmentation.
+
+    The annotation format is shown as follows. The `ann` field is optional
+    for testing.
 
     .. code-block:: none
         [
@@ -180,7 +182,7 @@ class CocoPanoptic(CocoDataset):
     def __init__(self, formator='{:012}.png', write_png=False, **kwargs):
         self.formator = formator
         self.write_png = write_png
-        super(CocoPanoptic, self).__init__(**kwargs)
+        super(CocoPanopticDataset, self).__init__(**kwargs)
 
     def load_annotations(self, ann_file):
         """Load annotation from COCO Panoptic style annotation file.
@@ -221,8 +223,9 @@ class CocoPanoptic(CocoDataset):
         """Parse annotations and load panoptic gts.
 
         Args:
-            ann_info (list[dict]): Annotation info of an image.
             img_id (int): The index of an image.
+            ann_info (list[dict]): Annotation info of an image.
+
         Returns:
             dict: A dict containing the following keys: bboxes, bboxes_ignore,
                 labels, masks, seg_map.
@@ -233,29 +236,30 @@ class CocoPanoptic(CocoDataset):
         gt_mask_infos = []
 
         for i, ann in enumerate(ann_info):
-            mask_info = dict()
-
-            category_id = ann['category_id']
-            contiguous_cid = self.cat2label[category_id]
-
-            mask_info['id'] = ann['id']
-            mask_info['category'] = contiguous_cid
-            gt_mask_infos.append(mask_info)
-
             x1, y1, w, h = ann['bbox']
             if ann['area'] <= 0 or w < 1 or h < 1:
                 continue
             bbox = [x1, y1, x1 + w, y1 + h]
 
+            category_id = ann['category_id']
+            contiguous_cat_id = self.cat2label[category_id]
+
             is_thing = self.coco.load_cats(ids=category_id)[0]['isthing']
-            if not is_thing:
-                continue
-            if ann['iscrowd']:
-                gt_bboxes_ignore.append(bbox)
-            else:
-                gt_bboxes.append(bbox)
-                gt_labels.append(contiguous_cid)
-                mask_info['is_thing'] = True
+            if is_thing:
+                is_crowd = ann.get('iscrowd', False)
+                if not is_crowd:
+                    gt_bboxes.append(bbox)
+                    gt_labels.append(contiguous_cat_id)
+                else:
+                    gt_bboxes_ignore.append(bbox)
+                    is_thing = False
+
+            mask_info = {
+                'id': ann['id'],
+                'category': contiguous_cat_id,
+                'is_thing': is_thing
+            }
+            gt_mask_infos.append(mask_info)
 
         if gt_bboxes:
             gt_bboxes = np.array(gt_bboxes, dtype=np.float32)
@@ -334,7 +338,7 @@ class CocoPanoptic(CocoDataset):
                 })
                 pan_format[mask] = color
             # put the formatted results into buffer
-            self.pano_buffer.append(pan_format)
+            self.pan_buffer.append(pan_format)
             if self.write_png:
                 mmcv.imwrite(
                     pan_format[..., ::-1],
@@ -356,15 +360,14 @@ class CocoPanoptic(CocoDataset):
                 corresponding filename.
         """
         result_files = dict()
-        pano_results = [result['pano_results'] for result in results]
-        pano_json_results = self._pan2json(pano_results, outfile_prefix)
+        pan_results = [result['pan_results'] for result in results]
+        pan_json_results = self._pan2json(pan_results, outfile_prefix)
         result_files['panoptic'] = f'{outfile_prefix}.panoptic.json'
-        mmcv.dump(pano_json_results, result_files['panoptic'])
+        mmcv.dump(pan_json_results, result_files['panoptic'])
 
         return result_files
 
     def pq_compute_single(self, pq_stat, pan_gt, pan_pred, gt_ann, pred_ann):
-        # from rgb to id...
         pan_gt = rgb2id(pan_gt)
         pan_pred = rgb2id(pan_pred)
 
@@ -470,7 +473,7 @@ class CocoPanoptic(CocoDataset):
 
         assert len(gt_json) == len(pred_json)
         PQStat_ = PQStat()
-        for img_id, pan_pred in zip(pred_json.keys(), self.pano_buffer):
+        for img_id, pan_pred in zip(pred_json.keys(), self.pan_buffer):
             pan_gt_path = os.path.join(self.seg_prefix,
                                        self.formator.format(img_id))
             pan_gt = mmcv.imread(pan_gt_path)[..., ::-1]  # convert to rgb
@@ -517,7 +520,7 @@ class CocoPanoptic(CocoDataset):
                 raise KeyError(f'metric {metric} is not supported')
 
         # panoptic results buffer
-        self.pano_buffer = []
+        self.pan_buffer = []
         result_files, tmp_dir = self.format_results(results, jsonfile_prefix)
         eval_results = {}
 
@@ -526,7 +529,7 @@ class CocoPanoptic(CocoDataset):
             eval_results.update(eval_pan_results)
 
         # clear buffer
-        self.pano_buffer.clear()
+        self.pan_buffer.clear()
 
         if tmp_dir is not None:
             tmp_dir.cleanup()
