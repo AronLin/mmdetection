@@ -3,9 +3,12 @@ import warnings
 import mmcv
 import numpy as np
 import torch
+from mmcv.runner import get_dist_info
 from torch.nn.modules.utils import _pair
 
 from .builder import PRIOR_GENERATORS
+
+rank, _ = get_dist_info()
 
 
 @PRIOR_GENERATORS.register_module()
@@ -320,8 +323,10 @@ class AnchorGenerator:
                 are the sizes of the corresponding feature level, \
                 num_base_anchors is the number of anchors for that level.
         """
-        warnings.warn('``grid_anchors`` would be deprecated soon. '
-                      'Please use ``grid_priors`` ')
+        if rank == 0:
+            # warnings.warn only print once
+            warnings.warn('``grid_anchors`` would be deprecated soon. '
+                          'Please use ``grid_priors`` ')
 
         assert self.num_levels == len(featmap_sizes)
         multi_level_anchors = []
@@ -355,10 +360,11 @@ class AnchorGenerator:
         Returns:
             torch.Tensor: Anchors in the overall feature maps.
         """
-
-        warnings.warn(
-            '``single_level_grid_anchors`` would be deprecated soon. '
-            'Please use ``single_level_grid_priors`` ')
+        if rank == 0:
+            # warnings.warn only print once
+            warnings.warn(
+                '``single_level_grid_anchors`` would be deprecated soon. '
+                'Please use ``single_level_grid_priors`` ')
 
         # keep featmap_size as Tensor instead of int, so that we
         # can covert to ONNX correctly
